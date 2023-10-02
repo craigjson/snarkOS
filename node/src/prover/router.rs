@@ -103,8 +103,16 @@ impl<N: Network, C: ConsensusStorage<N>> Reading for Prover<N, C> {
         // Process the message. Disconnect if the peer violated the protocol.
         if let Err(error) = self.inbound(peer_addr, message).await {
             if let Some(peer_ip) = self.router().resolve_to_listener(&peer_addr) {
-                warn!("Disconnecting from '{peer_addr}' - {error}");
+                warn!(
+                    peer_addr = peer_addr.to_string(),
+                    disconnect_reason = "ProtocolViolation",
+                    error = %error,
+                    "Disconnecting due to Protocol Violation"
+                );
+
+                // Send a disconnect message to the peer.
                 Outbound::send(self, peer_ip, Message::Disconnect(DisconnectReason::ProtocolViolation.into()));
+
                 // Disconnect from this peer.
                 self.router().disconnect(peer_ip);
             }
@@ -141,13 +149,21 @@ impl<N: Network, C: ConsensusStorage<N>> Outbound<N> for Prover<N, C> {
 impl<N: Network, C: ConsensusStorage<N>> Inbound<N> for Prover<N, C> {
     /// Handles a `BlockRequest` message.
     fn block_request(&self, peer_ip: SocketAddr, _message: BlockRequest) -> bool {
-        debug!("Disconnecting '{peer_ip}' for the following reason - {:?}", DisconnectReason::ProtocolViolation);
+        debug!(
+            peer_ip = peer_ip.to_string(),
+            disconnect_reason = "ProtocolViolation",
+            "Disconnecting due to Protocol Violation"
+        );
         false
     }
 
     /// Handles a `BlockResponse` message.
     fn block_response(&self, peer_ip: SocketAddr, _blocks: Vec<Block<N>>) -> bool {
-        debug!("Disconnecting '{peer_ip}' for the following reason - {:?}", DisconnectReason::ProtocolViolation);
+        debug!(
+            peer_ip = peer_ip.to_string(),
+            disconnect_reason = "ProtocolViolation",
+            "Disconnecting due to Protocol Violation"
+        );
         false
     }
 
@@ -159,7 +175,11 @@ impl<N: Network, C: ConsensusStorage<N>> Inbound<N> for Prover<N, C> {
             if let Some(block_locators) = message.block_locators {
                 // Check the block locators are valid, and update the peer in the sync pool.
                 if let Err(error) = self.sync.update_peer_locators(peer_ip, block_locators) {
-                    warn!("Peer '{peer_ip}' sent invalid block locators: {error}");
+                    warn!(
+                        peer_ip = peer_ip.to_string(),
+                        error = %error,
+                        "Peer sent invalid block locators"
+                    );
                     return false;
                 }
             }
@@ -188,7 +208,12 @@ impl<N: Network, C: ConsensusStorage<N>> Inbound<N> for Prover<N, C> {
 
     /// Disconnects on receipt of a `PuzzleRequest` message.
     fn puzzle_request(&self, peer_ip: SocketAddr) -> bool {
-        debug!("Disconnecting '{peer_ip}' for the following reason - {:?}", DisconnectReason::ProtocolViolation);
+        tracing::debug!(
+            peer_ip = peer_ip.to_string(),
+            disconnect_reason = "ProtocolViolation",
+            "Disconnecting due to Protocol Violation"
+        );
+
         false
     }
 
@@ -199,10 +224,13 @@ impl<N: Network, C: ConsensusStorage<N>> Inbound<N> for Prover<N, C> {
         // Retrieve the block height.
         let block_height = header.height();
 
+        // Log the Coinbase Puzzle information with structured fields.
         info!(
-            "Coinbase Puzzle (Epoch {epoch_number}, Block {block_height}, Coinbase Target {}, Proof Target {})",
-            header.coinbase_target(),
-            header.proof_target()
+            epoch_number = epoch_number,
+            block_height = block_height,
+            coinbase_target = header.coinbase_target(),
+            proof_target = header.proof_target(),
+            "Recieved 'Coinbase Puzzle'"
         );
 
         // Save the latest epoch challenge in the node.
@@ -210,7 +238,13 @@ impl<N: Network, C: ConsensusStorage<N>> Inbound<N> for Prover<N, C> {
         // Save the latest block header in the node.
         self.latest_block_header.write().replace(header);
 
-        trace!("Received 'PuzzleResponse' from '{peer_ip}' (Epoch {epoch_number}, Block {block_height})");
+        trace!(
+            peer_ip = peer_ip.to_string(),
+            epoch_number = epoch_number,
+            block_height = block_height,
+            "Received 'PuzzleResponse'"
+        );
+
         true
     }
 
@@ -242,9 +276,17 @@ impl<N: Network, C: ConsensusStorage<N>> Inbound<N> for Prover<N, C> {
                     self.propagate_to_validators(message, &[peer_ip]);
                 }
                 Ok(Ok(false)) | Ok(Err(_)) => {
-                    trace!("Invalid prover solution '{}' for the proof target.", solution.commitment())
+                    trace!(
+                        solution_commitment = %solution.commitment(),
+                        proof_target = proof_target,
+                        "Invalid prover solution for the proof target."
+                    );
                 }
-                Err(error) => warn!("Failed to verify the prover solution: {error}"),
+                Err(error) => warn!(
+                    peer_ip = peer_ip.to_string(),
+                    error = %error,
+                    "Failed to verify the prover solution"
+                ),
             }
         }
         true
